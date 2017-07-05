@@ -10,6 +10,12 @@ namespace Kodai.FLIP.CPU {
             EMPTY, FLUID, SOLID
         }
 
+        struct FluidParticle {
+            public Vector2 pos;
+            public Vector2 vel;
+        }
+        FluidParticle[] particles;
+
         public int n = 32;
         public float dt = 1 / 120f;
         public float flip = 0.96f;
@@ -23,10 +29,6 @@ namespace Kodai.FLIP.CPU {
         private float[] m;
         private float[] p;
         private float[] divu;
-
-        private Vector2[] pos;
-        private Vector2[] particleVel;
-
         private Cell[] flags;
 
         private int numParticles;
@@ -56,11 +58,16 @@ namespace Kodai.FLIP.CPU {
             
         }
 
+        private void OnDrawGizmos() {
+            Vector2 a = new Vector2(n, n);
+            Gizmos.DrawWireCube(a/2, a);
+        }
+
         private void Render() {
             Vector3[] v = new Vector3[numParticles];
             int[] idx = new int[numParticles];
             for (int i = 0; i < numParticles; i++) {
-                v[i] = new Vector3(pos[i].x, pos[i].y, 0);
+                v[i] = new Vector3(particles[i].pos.x, particles[i].pos.y, 0);
                 idx[i] = i;
             }
             mesh.vertices = v;
@@ -79,10 +86,8 @@ namespace Kodai.FLIP.CPU {
 
 
             numParticles = (n - 2) / 4 * (n - 4) * 4;
+            particles = new FluidParticle[numParticles];
             Debug.Log(numParticles);
-
-            pos = new Vector2[numParticles];
-            particleVel = new Vector2[numParticles];
 
             int idx = 0;
             for (int j = 1; j < n - 1; ++j) {
@@ -90,8 +95,8 @@ namespace Kodai.FLIP.CPU {
                     if (idx < numParticles && i - 1 < (n - 2) / 4) {
                         for (int jj = 0; jj < 2; ++jj) {
                             for (int ii = 0; ii < 2; ++ii) {
-                                pos[idx].x = i + 0.25f + ii * 0.5f;
-                                pos[idx++].y = j + 0.25f + jj * 0.5f;
+                                particles[idx].pos.x = i + 0.25f + ii * 0.5f;
+                                particles[idx++].pos.y = j + 0.25f + jj * 0.5f;
                             }
                         }
                     }
@@ -126,26 +131,26 @@ namespace Kodai.FLIP.CPU {
             for (int k = 0; k < numParticles; ++k) {
                 // 格子インデックスを取得(格子の大きさは1)
                 // TODO 格子の大きさを可変に
-                int i  = (int) pos[k].x, 
-                    j  = (int) pos[k].y, 
-                    fi = (int) (pos[k].x - 0.5f), // 半分左にずらす
-                    fj = (int) (pos[k].y - 0.5f); // 半分下にずらす
+                int i  = (int) particles[k].pos.x, 
+                    j  = (int) particles[k].pos.y, 
+                    fi = (int) (particles[k].pos.x - 0.5f), // 半分左にずらす
+                    fj = (int) (particles[k].pos.y - 0.5f); // 半分下にずらす
 
                 flags[i + j * n] = Cell.FLUID;  // 粒子の存在する格子は流体フラグ
 
                 // 上下左右のずれた格子点を参照(x速度)
                 for (int jj = fj; jj < fj + 2; ++jj) {
                     for (int ii = i; ii < i + 2; ++ii) {
-                        u[IDXX(ii, jj)] += particleVel[k].x * InterpolateX(ii, jj, pos[k]);
-                        m[IDXX(ii, jj)] += InterpolateX(ii, jj, pos[k]);
+                        u[IDXX(ii, jj)] += particles[k].vel.x * InterpolateX(ii, jj, particles[k].pos);
+                        m[IDXX(ii, jj)] += InterpolateX(ii, jj, particles[k].pos);
                     }
                 }
 
                 // 上下左右の格子点を参照(y速度)
                 for (int jj = j; jj < j + 2; ++jj) {
                     for (int ii = fi; ii < fi + 2; ++ii) {
-                        u[IDXY(ii, jj)] += particleVel[k].y * InterpolateY(ii, jj, pos[k]);
-                        m[IDXY(ii, jj)] += InterpolateY(ii, jj, pos[k]);    // 2回やるの？？
+                        u[IDXY(ii, jj)] += particles[k].vel.y * InterpolateY(ii, jj, particles[k].pos);
+                        m[IDXY(ii, jj)] += InterpolateY(ii, jj, particles[k].pos);    // 2回やるの？？
                     }
                 }
             }
@@ -231,10 +236,10 @@ namespace Kodai.FLIP.CPU {
             for (int k = 0; k < numParticles; ++k) {
 
                 // 自身の格子インデックス
-                int i  = (int) (pos[k].x),
-                    j  = (int) (pos[k].y), 
-                    fi = (int) (pos[k].x - 0.5f), 
-                    fj = (int) (pos[k].y - 0.5f);
+                int i  = (int) (particles[k].pos.x),
+                    j  = (int) (particles[k].pos.y), 
+                    fi = (int) (particles[k].pos.x - 0.5f), 
+                    fj = (int) (particles[k].pos.y - 0.5f);
 
 
                 float vx = 0, 
@@ -244,26 +249,26 @@ namespace Kodai.FLIP.CPU {
 
                 for (int jj = fj; jj < fj + 2; ++jj) {
                     for (int ii = i; ii < i + 2; ++ii) {
-                        vx += u[IDXX(ii, jj)] * (1 - Mathf.Abs(ii - pos[k].x)) * (1 - Mathf.Abs(jj + 0.5f - pos[k].y));
-                        vxOld += ux[IDXX(ii, jj)] * (1 - Mathf.Abs(ii - pos[k].x)) * (1 - Mathf.Abs(jj + 0.5f - pos[k].y));
+                        vx += u[IDXX(ii, jj)] * (1 - Mathf.Abs(ii - particles[k].pos.x)) * (1 - Mathf.Abs(jj + 0.5f - particles[k].pos.y));
+                        vxOld += ux[IDXX(ii, jj)] * (1 - Mathf.Abs(ii - particles[k].pos.x)) * (1 - Mathf.Abs(jj + 0.5f - particles[k].pos.y));
                     }
                 }
 
                 for (int jj = j; jj < j + 2; ++jj) {
                     for (int ii = fi; ii < fi + 2; ++ii) {
-                        vy += u[IDXY(ii, jj)] * (1 - Mathf.Abs(ii + 0.5f - pos[k].x)) * (1 - Mathf.Abs(jj - pos[k].y));
-                        vyOld += ux[IDXY(ii, jj)] * (1 - Mathf.Abs(ii + 0.5f - pos[k].x)) * (1 - Mathf.Abs(jj - pos[k].y));
+                        vy += u[IDXY(ii, jj)] * (1 - Mathf.Abs(ii + 0.5f - particles[k].pos.x)) * (1 - Mathf.Abs(jj - particles[k].pos.y));
+                        vyOld += ux[IDXY(ii, jj)] * (1 - Mathf.Abs(ii + 0.5f - particles[k].pos.x)) * (1 - Mathf.Abs(jj - particles[k].pos.y));
                     }
                 }
 
                 // 速度の更新
-                particleVel[k].x = (1 - flip) * vx + flip * (particleVel[k].x + vx - vxOld);
-                particleVel[k].y = (1 - flip) * vy + flip * (particleVel[k].y + vy - vyOld);
+                particles[k].vel.x = (1 - flip) * vx + flip * (particles[k].vel.x + vx - vxOld);
+                particles[k].vel.y = (1 - flip) * vy + flip * (particles[k].vel.y + vy - vyOld);
 
                 // 壁衝突判定
                 // 更新した速度で動かすわけではない！
-                pos[k].x = Mathf.Min(Mathf.Max(pos[k].x + vx * dt, 1.001f), n - 1.001f);
-                pos[k].y = Mathf.Min(Mathf.Max(pos[k].y + vy * dt, 1.001f), n - 1.001f);
+                particles[k].pos.x = Mathf.Min(Mathf.Max(particles[k].pos.x + vx * dt, 1.001f), n - 1.001f);
+                particles[k].pos.y = Mathf.Min(Mathf.Max(particles[k].pos.y + vy * dt, 1.001f), n - 1.001f);
             }
         }
 
