@@ -1,9 +1,11 @@
-﻿#pragma kernel InitializeGrid
+﻿#pragma kernel ResetStaggeredGridQuantities
+#pragma kernel ResetGridQuantities
+#pragma kernel Transfer
 
-#define SIMULATION_BLOCK_SIZE 32
-#define SOLID 0
+#define THREAD_NUM_X 16
+#define SOLID 2
 #define FLUID 1
-#define EMPTY 2
+#define EMPTY 0
 
 
 struct FluidParticle {
@@ -12,18 +14,19 @@ struct FluidParticle {
 };
 
 RWStructuredBuffer<FluidParticle> _Particles;
-RWStructuredBuffer<float> _U;
-RWStructuredBuffer<float> _UX;
-RWStructuredBuffer<float> _M;
-RWStructuredBuffer<float> _P;
-RWStructuredBuffer<float> _Divu;
-RWStructuredBuffer<int> _Flags;
+RWStructuredBuffer<float>	_GridVel;
+RWStructuredBuffer<float>	_GridVelSaved;
+RWStructuredBuffer<int>	_GridMass;
+RWStructuredBuffer<float>	_GridPressure;
+RWStructuredBuffer<float>	_GridDivergence;
+RWStructuredBuffer<int>		_GridFlag;
 
 
 cbuffer cb {
 	uint _N;
+	float _DT;
+	float _Flip;
 	uint _Y;
-	uint _NumParticles;
 };
 
 
@@ -35,84 +38,74 @@ float InterpolateY(int cellX, int cellY, float2 pos) {
 	return (1 - abs(cellX + 0.5f - pos.x)) * (1 - abs(cellY - pos.y));
 }
 
-int IDXX(int i, int j) {
+int CalcIndexX(int i, int j) {
 	return (i + j * (_N + 1));
 }
 
-int IDXY(int i, int j) {
+int CalcIndexY(int i, int j) {
 	return _Y + i + j * _N;
 }
 
 
 // 2 * n * n+1
-[numthreads(SIMULATION_BLOCK_SIZE,1,1)]
-void InitializeGrid(uint3 DTid : SV_DispatchThreadID) {
-	// 特に処理なし。
-	// パーティクルの初期位置はCPU側で決めていいのでは？
-
+[numthreads(THREAD_NUM_X,1,1)]
+void ResetStaggeredGridQuantities(uint3 DTid : SV_DispatchThreadID) {
 	int id = DTid.x;
 
-	_U[id] = 0;
-	_UX[id] = 0;
-	_M[id] = 0;
+	_GridVel[id] = 0;
+	_GridVelSaved[id] = 0;
+	_GridMass[id] = 0;
 }
 
-int2 One2Two(int idx, int n){
+int2 One2Two(int idx, int n) {
 	return int2(idx % n, idx / n);
 }
 
-[numthreads(SIMULATION_BLOCK_SIZE, 1, 1)]
-void InitializeFlag(uint3 DTid : SV_DispatchThreadID) {
+[numthreads(THREAD_NUM_X, 1, 1)]
+void ResetGridQuantities(uint3 DTid : SV_DispatchThreadID) {
 	int id = DTid.x;
-	int2 id2 = One2Two(id, _N);
-	int i = id2.x;
-	int j = id2.y;
-	_Flags[id] = (i == 0 || j == 0 || i == _N - 1 || j == _N - 1) ? SOLID : EMPTY;
-	_P[id] = 0;
+
+	_GridPressure[id] = 0;
+	_GridDivergence[id] = 0;
+
+
+	int2 iid = One2Two(id, _N);
+	int i = iid.x; int j = iid.y;
+
+	_GridFlag[id] = (i == 0 || j == 0 || i == _N - 1 || j == _N - 1) ? SOLID : EMPTY;
 }
 
-// particle num
-[numthreads(SIMULATION_BLOCK_SIZE, 1, 1)]
-void ParticleToGrid(uint3 DTid : SV_DispatchThreadID) {
-
+// numParticles
+[numthreads(THREAD_NUM_X, 1, 1)]
+void Transfer(uint3 DTid : SV_DispatchThreadID) {
 	int id = DTid.x;
 
+	// Each particle
+	// TODO 格子の大きさを可変に
 	int i  = (int)_Particles[id].pos.x,
-		j  = (int)_Particles[id].pos.y,
-		fi = (int)(_Particles[id].pos.x - 0.5f),
-		fj = (int)(_Particles[id].pos.y - 0.5f);
+	    j  = (int)_Particles[id].pos.y,
+	    fi = (int)(_Particles[id].pos.x - 0.5f), // 半分左にずらす
+	    fj = (int)(_Particles[id].pos.y - 0.5f); // 半分下にずらす
 
-	_Flags[i + j * _N] = FLUID;
+	_GridFlag[i + j * _N] = FLUID;  // 粒子の存在する格子は流体フラグ
 
-	// 上下左右のずれた格子点を参照(x速度)
-	for (int jj = fj; jj < fj + 2; ++jj) {
-		for (int ii = i; ii < i + 2; ++ii) {
-			_U[IDXX(ii, jj)] += _Particles[id].vel.x * InterpolateX(ii, jj, _Particles[id].pos);
-			_M[IDXX(ii, jj)] += InterpolateX(ii, jj, _Particles[id].pos);
-		}
-	}
+	InterlockedAdd(_GridMass[0], 1);
+	// 他のスレッドと競合している
+	// X - velocity
+	//for (int jj = fj; jj < fj + 2; ++jj) {
+	//    for (int ii = i; ii < i + 2; ++ii) {
+	//		_GridVel[CalcIndexX(ii, jj)] += _Particles[id].vel.x * InterpolateX(ii, jj, _Particles[id].pos);
+	//		InterlockedAdd(_GridMass[CalcIndexX(ii, jj)], 10);
+	//		//_GridMass[CalcIndexX(ii, jj)] += 1;	//InterpolateX(ii, jj, _Particles[id].pos)
+	//    }
+	//}
 
-	// 上下左右の格子点を参照(y速度)
-	for (int jj = j; jj < j + 2; ++jj) {
-		for (int ii = fi; ii < fi + 2; ++ii) {
-
-			_U[IDXY(ii, jj)] += _Particles[id].vel.y * InterpolateY(ii, jj, _Particles[id].pos);
-			_M[IDXY(ii, jj)] += InterpolateY(ii, jj, _Particles[id].pos);
-		}
-	}
+	//// Y - velocity
+	//for (int jj = j; jj < j + 2; jj++) {
+	//    for (int ii = fi; ii < fi + 2; ii++) {
+	//		_GridVel[CalcIndexY(ii, jj)] += _Particles[id].vel.y * InterpolateY(ii, jj, _Particles[id].pos);
+	//		InterlockedAdd(_GridMass[CalcIndexY(ii, jj)], 1);
+	//		//_GridMass[CalcIndexY(ii, jj)] += InterpolateY(ii, jj, _Particles[id].pos);
+	//    }
+	//}
 }
-
-// 2 * (n+1) * n
-[numthreads(SIMULATION_BLOCK_SIZE, 1, 1)]
-void UpdateAndCopyGridVelocity(uint3 DTid : SV_DispatchThreadID) {
-	int id = DTid.x;
-
-	// 格子に質量があれば
-	if (_M[id] > 1e-8) {
-		_M[id] = 1 / _M[id];    // 格子の質量を逆数にして
-		_U[id] *= _M[id];       // 速度に掛ける
-	}
-
-	_UX[id] = _U[id];
-}
-

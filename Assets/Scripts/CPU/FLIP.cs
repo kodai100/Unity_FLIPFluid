@@ -5,7 +5,7 @@ using UnityEngine;
 namespace Kodai.FLIP.CPU {
 
     public enum Cell {
-        EMPTY, FLUID, SOLID
+        EMPTY = 0, FLUID = 1, SOLID = 2
     }
 
     struct FluidParticle {
@@ -30,7 +30,7 @@ namespace Kodai.FLIP.CPU {
         private float[] gridMass;
         private float[] gridPressure;
         private float[] gridVelDivergence;
-        private Cell[]  gridFlag;
+        private int[]  gridFlag;
 
         [SerializeField] private int numParticles;
 
@@ -88,7 +88,7 @@ namespace Kodai.FLIP.CPU {
 
             gridPressure = new float[n * n];
             gridVelDivergence = new float[n * n];
-            gridFlag = new Cell[n * n];
+            gridFlag = new int[n * n];
         }
 
         void InitializeParticle() {
@@ -128,14 +128,16 @@ namespace Kodai.FLIP.CPU {
                 gridMass[i] = 0;
             }
 
+            // n * n
             for(int i = 0; i < gridPressure.Length; i++) {
                 gridPressure[i] = 0;
+                gridVelDivergence[i] = 0;
             }
 
             // 端の場合SOLID, それ以外の場合EMPTY
             for (int j = 0; j < n; ++j) {
                 for (int i = 0; i < n; ++i) {
-                    gridFlag[i + j * n] = (i == 0 || j == 0 || i == n - 1 || j == n - 1) ? Cell.SOLID : Cell.EMPTY;
+                    gridFlag[i + j * n] = (i == 0 || j == 0 || i == n - 1 || j == n - 1) ? (int)Cell.SOLID : (int)Cell.EMPTY;
                 }
             }
         }
@@ -155,13 +157,13 @@ namespace Kodai.FLIP.CPU {
                     fi = (int) (particles[k].pos.x - 0.5f), // 半分左にずらす
                     fj = (int) (particles[k].pos.y - 0.5f); // 半分下にずらす
 
-                gridFlag[i + j * n] = Cell.FLUID;  // 粒子の存在する格子は流体フラグ
+                gridFlag[i + j * n] = (int)Cell.FLUID;  // 粒子の存在する格子は流体フラグ
 
                 // X - velocity
                 for (int jj = fj; jj < fj + 2; ++jj) {
                     for (int ii = i; ii < i + 2; ++ii) {
                         gridVel[CalcIndexX(ii, jj)] += particles[k].vel.x * InterpolateX(ii, jj, particles[k].pos);
-                        gridMass[CalcIndexX(ii, jj)] += InterpolateX(ii, jj, particles[k].pos);
+                        gridMass[CalcIndexX(ii, jj)] += 1;// InterpolateX(ii, jj, particles[k].pos);
                     }
                 }
 
@@ -173,6 +175,10 @@ namespace Kodai.FLIP.CPU {
                     }
                 }
             }
+
+            DebugConsole(gridMass);
+            DebugConsole(gridFlag);
+            
 
             for (int k = 0; k < 2 * n * (n + 1); ++k) {
                 // 格子に質量があれば
@@ -188,6 +194,14 @@ namespace Kodai.FLIP.CPU {
                 gridVelSaved[i] = gridVel[i];
             }
 
+        }
+
+        void DebugConsole<T>(T[] array) {
+            string str = "CPU: ";
+            foreach (T tmp in array) {
+                str += tmp + ", ";
+            }
+            Debug.Log(str);
         }
 
         /// <summary>
@@ -223,7 +237,7 @@ namespace Kodai.FLIP.CPU {
                 for (int j = 1; j < n - 1; ++j) {
                     for (int i = 1; i < n - 1; ++i) {
                         
-                        if (gridFlag[i + j * n] != Cell.FLUID) continue;
+                        if (gridFlag[i + j * n] != (int)Cell.FLUID) continue;
 
                         // 上下左右を判定し、枠だった場合は0
                         float l = i > 1 ? -1 : 0,       // left
@@ -284,7 +298,6 @@ namespace Kodai.FLIP.CPU {
                         vxOld += gridVelSaved[CalcIndexX(ii, jj)] * InterpolateX(ii, jj, particles[k].pos);
                     }
                 }
-                if (k == 0) Debug.Log(vx);
 
                 for (int jj = j; jj < j + 2; ++jj) {
                     for (int ii = fi; ii < fi + 2; ++ii) {
