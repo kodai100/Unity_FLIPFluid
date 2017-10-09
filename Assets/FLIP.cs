@@ -12,7 +12,9 @@ namespace Kodai.FLIP.CPU {
 
         public int n = 32;
         public float dt = 1 / 120f;
-
+        public float mass = 1f;
+        public Vector2 iv = new Vector2(0.1f, 0);
+        public Vector2 force = new Vector2(0, -9.8f);
 
         int y;
 
@@ -22,26 +24,27 @@ namespace Kodai.FLIP.CPU {
         private float[] p;
         private float[] divu;
 
-        private float[] px;
-        private float[] py;
+        private float[] px, ipx;
+        private float[] py, ipy;
         private float[] pvx;
         private float[] pvy;
 
         private Cell[] flags;
 
-        private int numParticles; 
+        private int numParticles;
 
 
         void Start() {
             Initialize();
         }
-        
+
 
         void Update() {
             particles2grid();
 
             for (int k = 0; k < n * (n + 1); ++k) {
-                if (m[y + k] > 1e-8) u[y + k] += -9.8f * dt * (n - 2);
+                if (m[y + k] > 1e-8) u[y + k] += force.y * dt * (n - 2);
+                if (m[k] > 1e-8) u[k] += force.x * dt * (n - 2);
             }
 
             pressureSolve();
@@ -50,7 +53,7 @@ namespace Kodai.FLIP.CPU {
 
         private void OnDrawGizmos() {
             if (!Application.isPlaying) return;
-            for(int i = 0; i < px.Length; i++) {
+            for (int i = 0; i < px.Length; i++) {
                 Gizmos.DrawWireSphere(new Vector3(px[i], py[i], 0), 0.1f);
             }
         }
@@ -70,8 +73,16 @@ namespace Kodai.FLIP.CPU {
 
             px = new float[numParticles];
             py = new float[numParticles];
+            ipx = new float[numParticles];
+            ipy = new float[numParticles];
             pvx = new float[numParticles];
             pvy = new float[numParticles];
+
+            for (int i = 0; i < numParticles; i++)
+            {
+                pvx[i] = iv.x;
+                pvy[i] = iv.y;
+            }
 
             int idx = 0;
             for (int j = 1; j < n - 1; ++j) {
@@ -80,7 +91,9 @@ namespace Kodai.FLIP.CPU {
                         for (int jj = 0; jj < 2; ++jj) {
                             for (int ii = 0; ii < 2; ++ii) {
                                 px[idx] = i + 0.25f + ii * 0.5f;
+                                ipx[idx] = px[idx];
                                 py[idx++] = j + 0.25f + jj * 0.5f;
+                                ipy[idx-1] = py[idx-1];
                             }
                         }
                     }
@@ -88,7 +101,17 @@ namespace Kodai.FLIP.CPU {
             }
         }
 
-        void particles2grid() {
+        float InterpolateX(int i, int j, float px, float py)
+        {
+            return (1f - Mathf.Abs(i - px)) * (1f - Mathf.Abs(j + 0.5f - py));
+        }
+
+        float InterpolateY(int i, int j, float px, float py)
+        {
+            return (1f - Mathf.Abs(i + 0.5f - px)) * (1f - Mathf.Abs(j - py));
+        }
+
+    void particles2grid() {
 
             // memset u 0
             // memset m 0
@@ -109,14 +132,14 @@ namespace Kodai.FLIP.CPU {
                 flags[i + j * n] = Cell.FLUID;
                 for (int jj = fj; jj < fj + 2; ++jj) {
                     for (int ii = i; ii < i + 2; ++ii) {
-                        u[IDXX(ii, jj)] += pvx[k] * (1 - Mathf.Abs(ii - px[k])) * (1 - Mathf.Abs(jj + 0.5f - py[k]));
-                        m[IDXX(ii, jj)] += (1 - Mathf.Abs(ii - px[k])) * (1 - Mathf.Abs(jj + 0.5f - py[k]));
+                        u[IDXX(ii, jj)] += pvx[k] * InterpolateX(ii, jj, px[k], py[k]);
+                        m[IDXX(ii, jj)] += mass * InterpolateX(ii, jj, px[k], py[k]);
                     }
                 }
                 for (int jj = j; jj < j + 2; ++jj) {
                     for (int ii = fi; ii < fi + 2; ++ii) {
-                        u[IDXY(ii, jj)] += pvy[k] * (1 - Mathf.Abs(ii + 0.5f - px[k])) * (1 - Mathf.Abs(jj - py[k]));
-                        m[IDXY(ii, jj)] += (1 - Mathf.Abs(ii + 0.5f - px[k])) * (1 - Mathf.Abs(jj - py[k]));
+                        u[IDXY(ii, jj)] += pvy[k] * InterpolateY(ii, jj, px[k], py[k]);
+                        m[IDXY(ii, jj)] += mass * InterpolateY(ii, jj, px[k], py[k]);
                     }
                 }
             }
@@ -185,23 +208,57 @@ namespace Kodai.FLIP.CPU {
 
                 for (int jj = fj; jj < fj + 2; ++jj) {
                     for (int ii = i; ii < i + 2; ++ii) {
-                        vx += u[IDXX(ii, jj)] * (1 - Mathf.Abs(ii - px[k])) * (1 - Mathf.Abs(jj + 0.5f - py[k]));
-                        vxOld += ux[IDXX(ii, jj)] * (1 - Mathf.Abs(ii - px[k])) * (1 - Mathf.Abs(jj + 0.5f - py[k]));
+                        vx += u[IDXX(ii, jj)] * InterpolateX(ii, jj, px[k], py[k]);
+                        vxOld += ux[IDXX(ii, jj)] * InterpolateX(ii, jj, px[k], py[k]);
                     }
                 }
 
                 for (int jj = j; jj < j + 2; ++jj) {
                     for (int ii = fi; ii < fi + 2; ++ii) {
-                        vy += u[IDXY(ii, jj)] * (1 - Mathf.Abs(ii + 0.5f - px[k])) * (1 - Mathf.Abs(jj - py[k]));
-                        vyOld += ux[IDXY(ii, jj)] * (1 - Mathf.Abs(ii + 0.5f - px[k])) * (1 - Mathf.Abs(jj - py[k]));
+                        vy += u[IDXY(ii, jj)] * InterpolateY(ii, jj, px[k], py[k]);
+                        vyOld += ux[IDXY(ii, jj)] * InterpolateY(ii, jj, px[k], py[k]);
                     }
                 }
 
                 pvx[k] = (1 - flip) * vx + flip * (pvx[k] + vx - vxOld);
                 pvy[k] = (1 - flip) * vy + flip * (pvy[k] + vy - vyOld);
-                px[k] = Mathf.Min(Mathf.Max(px[k] + vx * dt, 1.001f), n - 1.001f);
-                py[k] = Mathf.Min(Mathf.Max(py[k] + vy * dt, 1.001f), n - 1.001f);
+
+                // px[k] = Mathf.Min(Mathf.Max(px[k] + vx * dt, 1.001f), n - 1.001f);  // 境界
+                // py[k] = Mathf.Min(Mathf.Max(py[k] + vy * dt, 1.001f), n - 1.001f);  // 境界
+
+                if(px[k] + vx * dt < 1.001f)
+                {
+                    ReInitializeParticle(k);
+                } else if(px[k] + vx * dt > n - 1.001f)
+                {
+                    ReInitializeParticle(k);
+                }
+                else
+                {
+                    px[k] = px[k] + vx * dt;
+                }
+
+                if (py[k] + vy * dt < 1.001f)
+                {
+                    ReInitializeParticle(k);
+                }
+                else if (py[k] + vy * dt > n - 1.001f)
+                {
+                    ReInitializeParticle(k);
+                }
+                else
+                {
+                    py[k] = py[k] + vy * dt;
+                }
             }
+        }
+
+        void ReInitializeParticle(int k)
+        {
+            px[k] = 1.001f;
+            py[k] = ipy[k];
+            pvx[k] = iv.x;
+            pvy[k] = iv.y;
         }
 
         int IDXX(int i, int j) {
